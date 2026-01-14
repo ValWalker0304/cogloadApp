@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react"; // Added useRef
 import { Power, Keyboard, Mouse, BarChart3, X } from "lucide-react";
 import { Slider } from "./components/ui/slider";
 import { Switch } from "./components/ui/switch";
@@ -8,7 +8,7 @@ import { StatisticsPanel } from "./components/StatisticsPanel";
 import { motion, AnimatePresence } from "motion/react";
 
 const ipcRenderer = (window as any).require ? (window as any).require('electron').ipcRenderer : null;
-const API_URL = "http://localhost:5000/api"; //
+const API_URL = "http://localhost:80/api";
 
 interface Break {
   id: string;
@@ -18,24 +18,26 @@ interface Break {
 
 function App() {
   // --- STATE ---
-  const [isEnabled, setIsEnabled] = useState(false); // Matches system.state.monitoring_active
+  const [isEnabled, setIsEnabled] = useState(false);
   const [snoozeEnabled, setSnoozeEnabled] = useState(true);
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
-  const [focusLevel, setFocusLevel] = useState(0.8); // From /api/data/focus-level
+  const [focusLevel, setFocusLevel] = useState(0.8);
   
-  // UI Only State (No Backend counterpart yet)
+  // UI Only State
   const [showKeyboard, setShowKeyboard] = useState(true);
-  const [snoozeTime, setSnoozeTime] = useState([10]);
+  const [snoozeTime, setSnoozeTime] = useState([10]); // Slider state
   const [breakTime, setBreakTime] = useState([5]);
   const [showStatistics, setShowStatistics] = useState(false);
   const [breaks, setBreaks] = useState<Break[]>([
-    { id: '1', timestamp: new Date(), duration: 5 },// Placeholder until backend has break history
+    { id: '1', timestamp: new Date(), duration: 5 },
     { id: '2', timestamp: new Date(), duration: 5 },
     { id: '3', timestamp: new Date(), duration: 5 },
     { id: '4', timestamp: new Date(), duration: 5 },
   ]);
 
-  // Mock data for the graph (Backend currently only returns single focus float)
+  // Ref to track if it's the initial load to prevent unnecessary API calls
+  const isInitialMount = useRef(true);
+
   const [statisticsData, setStatisticsData] = useState([
     { day: 'Mon', breaks: 4, screenTime: 7.5 },
     { day: 'Tue', breaks: 5, screenTime: 8.2 },
@@ -48,23 +50,31 @@ function App() {
 
   // --- API INTEGRATION ---
 
-  // 1. Poll System State & Settings (Updates GUI from Backend)
   const fetchSystemState = async () => {
     try {
-      // Get State (Monitoring Active, Focus Level, etc)
       const stateRes = await fetch(`${API_URL}/system/state`);
       const stateData = await stateRes.json();
-      
-      // Update Monitoring Status
       setIsEnabled(stateData.monitoring_active);
       
-      // Get Settings (Switches)
+      if (stateData.break_history) {
+        const history: Break[] = stateData.break_history.map((b: any) => ({
+          id: b.id,
+          timestamp: new Date(b.timestamp),
+          duration: b.duration
+        }));
+        setBreaks(history);
+      }
+
       const settingsRes = await fetch(`${API_URL}/settings`);
       const settingsData = await settingsRes.json();
       setSnoozeEnabled(settingsData.snooze_feature_enabled);
       setAutoStartEnabled(settingsData.auto_start_enabled);
+      
+      // Sync slider with backend value on load (if valid)
+      if (settingsData.snooze_timer) {
+         setSnoozeTime([parseInt(settingsData.snooze_timer)]);
+      }
 
-      // Get Focus Level Data
       const focusRes = await fetch(`${API_URL}/data/focus-level`);
       const focusData = await focusRes.json();
       setFocusLevel(focusData.focus_level);
@@ -74,29 +84,52 @@ function App() {
     }
   };
 
-  // Poll every 1 second to keep GUI in sync with Watch/Backend
   useEffect(() => {
-    fetchSystemState(); // Initial fetch
-    const interval = setInterval(fetchSystemState, 30000); // Fetch time
+    fetchSystemState();
+    const interval = setInterval(fetchSystemState, 30000);
     return () => clearInterval(interval);
   }, []);
 
+  // --- NEW LOGIC: AUTO-SAVE SNOOZE TIMER ---
+  useEffect(() => {
+    // Skip the first render to avoid sending the default state immediately
+    if (isInitialMount.current) {
+        isInitialMount.current = false;
+        return;
+    }
 
-  // 2. Handle Start/Stop Monitoring
+    // Set a timer to save after 5 seconds of inactivity
+    const timeoutId = setTimeout(async () => {
+        try {
+            console.log("Auto-saving snooze timer:", snoozeTime[0]);
+            await fetch(`${API_URL}/settings`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    snooze_timer: snoozeTime[0]
+                })
+            });
+        } catch (error) {
+            console.error("Error auto-saving snooze timer:", error);
+        }
+    }, 5000); // 5000ms = 5 seconds
+
+    // Cleanup: If the user moves the slider again before 5s, clear the old timer
+    return () => clearTimeout(timeoutId);
+  }, [snoozeTime]); // Triggers whenever snoozeTime changes
+
+
   const toggleMonitoring = async () => {
     const endpoint = isEnabled ? '/system/stop' : '/system/start';
     try {
       await fetch(`${API_URL}${endpoint}`, { method: 'POST' });
-      // State will update on next poll, but we can optimistically flip it
       setIsEnabled(!isEnabled);
     } catch (error) {
       console.error("Error toggling system:", error);
     }
   };
 
-  // 3. Handle Settings Changes (Switches)
   const updateSettings = async (setting: string, value: boolean) => {
-    // Optimistic update
     if (setting === 'snooze') setSnoozeEnabled(value);
     if (setting === 'autostart') setAutoStartEnabled(value);
     if (ipcRenderer) {
@@ -114,12 +147,9 @@ function App() {
       });
     } catch (error) {
       console.error("Error updating settings:", error);
-      // Revert on failure (optional)
       fetchSystemState(); 
     }
   };
-
-  // --- UI EFFECTS ---
 
   useEffect(() => {
       let timeoutId: NodeJS.Timeout;
@@ -172,7 +202,7 @@ const handleToggleStats = () => {
               <TooltipTrigger asChild>
                 <div className="no-drag">
                   <motion.button
-                    onClick={toggleMonitoring} // <-- LINKED TO BACKEND
+                    onClick={toggleMonitoring}
                     whileTap={{ scale: 0.98 }}
                     className={`w-full p-4 rounded-xl transition-all relative overflow-hidden group flex items-center gap-4 shrink-0 ${
                       isEnabled
@@ -225,7 +255,7 @@ const handleToggleStats = () => {
               <span className="text-xs font-medium text-white/80">Snooze</span>
               <Switch 
                 checked={snoozeEnabled} 
-                onCheckedChange={(val) => updateSettings('snooze', val)} // <-- LINKED TO BACKEND
+                onCheckedChange={(val) => updateSettings('snooze', val)}
                 className="scale-75 origin-right" 
               />
             </div>
@@ -233,7 +263,7 @@ const handleToggleStats = () => {
               <span className="text-xs font-medium text-white/80">Auto-start</span>
               <Switch 
                 checked={autoStartEnabled} 
-                onCheckedChange={(val) => updateSettings('autostart', val)} // <-- LINKED TO BACKEND
+                onCheckedChange={(val) => updateSettings('autostart', val)}
                 className="scale-75 origin-right" 
               />
             </div>
@@ -288,8 +318,6 @@ const handleToggleStats = () => {
               initial={{ width: 0, opacity: 0, x: -20 }}
               animate={{ width: "auto", opacity: 1, x: 0 }}
               exit={{ width: 0, opacity: 0, x: -20 }} 
-              // Using a duration-based transition for Exit is often smoother for window resizing
-              // than a spring, as it guarantees a specific end time.
               transition={{ duration: 0.3, ease: "easeInOut" }} 
               className="flex-1 overflow-hidden h-full"
             >

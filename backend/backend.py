@@ -14,7 +14,7 @@ import json
 
 
 # --- WATCH CONFIGURATION (HARDCODED FOR TESTING) ---
-WATCH_IP = '10.208.35.238' 
+WATCH_IP = '10.125.106.238' 
 WATCH_PORT = 8080          
 LISTENER_PORT = 8081      
 
@@ -57,16 +57,22 @@ class SystemState:
     monitoring_active: bool = False
     auto_start_enabled: bool = False
     snooze_feature_enabled: bool = True
-    current_alert: Optional[Alert] = None
     last_break_time: Optional[datetime] = None
     focus_level: float = 0.8
     is_snoozed: bool = False
     snooze_until: Optional[datetime] = None
     paired_devices: List[str] = None
+    snooze_timer: int = 0.0833
+
+    watch_update_interval: float = 5.0
+
+    break_history: List[Dict] = None
     
     def __post_init__(self):
         if self.paired_devices is None:
             self.paired_devices = []
+        if self.break_history is None:
+            self.break_history = []
 
 class InputMonitor:
     def __init__(self):
@@ -131,7 +137,6 @@ class InputMonitor:
         self.mouse_distance = 0.0
         self.mouse_clicks = 0
         return interaction
-
 class FocusAnalyzer:
     """
     FOCUS CALCULATION ALGORITHM:
@@ -263,6 +268,9 @@ class FocusMonitoringSystem:
         self.alert_manager = AlertManager()
         self.monitoring_thread = None
         self.running = False
+
+        self.last_watch_update = 0.0
+        self.watch_update_interval: float = 5.0 # Watch update interval
         
     def start_monitoring(self):
         if self.state.monitoring_active:
@@ -305,10 +313,14 @@ class FocusMonitoringSystem:
                 if len(self.analyzer.interactions) >= 5:
                     focus_level = self.analyzer.calculate_focus_score()
                     self.state.focus_level = focus_level
+                    print(focus_level)
+                    print (f"[Load Percent: ] {(1 - focus_level)*100 :.2f}%")
                     
-                    if focus_level < 0.6:
+                    should_vibrate = False
+                    
+                    if focus_level < 0.4:
                         current_time = datetime.now()
-                        if current_time - last_alert_time > timedelta(minutes=2):
+                        if current_time - last_alert_time > timedelta(minutes=0.5):
                             if not self.state.is_snoozed or current_time > self.state.snooze_until:
                                 alert = self.alert_manager.create_alert(
                                     AlertType.FOCUS_DROP,
@@ -317,15 +329,28 @@ class FocusMonitoringSystem:
                                 self.state.current_alert = alert
                                 last_alert_time = current_time
                                 self.state.is_snoozed = False
+                                should_vibrate = True # Trigger vibration for this specific update
 
-                                self.send_to_watch(load=95, vibrate=True, snooze=get_settings()["snooze_feature_enabled"])
-                    
-                    if focus_level > 0.8:
-                        self.state.is_snoozed = False
+                                new_break = {
+                                    "id": self.state.break_history[0]["id"] + 1 if self.state.break_history else 1,
+                                    "timestamp": datetime.now().isoformat(),
+                                    "duration": 5
+                                }
+                                self.state.break_history.insert(0, new_break)
+                                self.state.break_history = self.state.break_history[:10]
+                                print ("Break added to history.")
+
+                    self.send_to_watch(
+                        load=1.0 - focus_level, 
+                        vibrate=should_vibrate, 
+                        snooze=self.state.snooze_feature_enabled,
+                        snoozeTime=getattr(self.state, 'snooze_timer', 5)
+                    )
                 
                 time.sleep(5)
                 
-            except Exception:
+            except Exception as e:
+                print(f"Error in loop: {e}")
                 time.sleep(10)
     
     def update_settings(self, settings: Dict[str, Any]):
@@ -334,24 +359,29 @@ class FocusMonitoringSystem:
             self.state.auto_start_enabled = settings["auto_start_enabled"]
         if "snooze_feature_enabled" in settings:
             self.state.snooze_feature_enabled = settings["snooze_feature_enabled"]
+        if "snooze_timer" in settings:
+            self.state.snooze_timer = settings["snooze_timer"]
         return {"status": "settings_updated"}
-    
-    # def pair_device(self, device_id: str):
-    #     if device_id not in self.state.paired_devices:
-    #         self.state.paired_devices.append(device_id)
-    #     return {"status": "paired", "device_id": device_id}
-
 
     # IVAN ADDED FUNCTIONALITY FOR SENDING THINGS TO THE WATCH
-    def send_to_watch(self, load, vibrate=False, snooze=True, snoozeTime=0.1):
+    def send_to_watch(self, load, vibrate=False, snooze=True, snoozeTime=0.1, fromSnooze=False):
+
+        if not fromSnooze:
+            current_time = time.time()
+            if current_time - self.last_watch_update < self.state.watch_update_interval:
+                if not vibrate: 
+                    return
+
         try:
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.settimeout(2)
             client.connect((WATCH_IP, WATCH_PORT))
+            load = load * 100 
             data = json.dumps({"load": load, "vibrate": vibrate, "snooze": snooze, "snoozeTime": snoozeTime})
             client.sendall(f"{data}\n".encode('utf-8'))
             client.close()
             print(f"[Socket] Sent to watch: {data}")
+
         except Exception as e:
             print(f"[Socket] Send Error: {e}")
 
@@ -362,7 +392,7 @@ class FocusMonitoringSystem:
         try:
             server.bind(('0.0.0.0', LISTENER_PORT))
             server.listen(1)
-            print(f"[Socket] Listening for SNOOZE on port {LISTENER_PORT}...")
+            print(f"[Socket] Listening for SNOOZE on port {LISTENER_PORT}...", flush=True)
             
             while self.running:
                 try:
@@ -373,16 +403,36 @@ class FocusMonitoringSystem:
                         continue
                         
                     msg = client.recv(1024).decode('utf-8').strip()
+                    
                     if msg == "SNOOZE":
-                        print("\n>>> WATCH TRIGGERED SNOOZE <<<\n")
+                        snooze_minutes = getattr(self.state, 'snooze_timer', 1)
+                        print(f"\n>>> WATCH TRIGGERED SNOOZE. Sleeping for {snooze_minutes} mins... <<<\n", flush=True)
+                        
                         self.state.is_snoozed = True
-                        self.state.snooze_until = datetime.now() + timedelta(minutes=5)
-                        if self.state.current_alert:
-                             self.alert_manager.handle_response(self.state.current_alert.id, UserResponse.SNOOZE)
-                             
+                        self.state.snooze_until = datetime.now() + timedelta(minutes=snooze_minutes)
+                        client.close()
+
+                        time.sleep(snooze_minutes * 60)
+
+                        print(f"\n>>> SNOOZE FINISHED. Waking up watch! <<<\n", flush=True)
+                        self.state.is_snoozed = False
+                        
+                        current_load = 1.0 - self.state.focus_level
+
+                        self.send_to_watch(
+                            load=current_load,
+                            vibrate=True,       
+                            snooze=True,
+                            snoozeTime=snooze_minutes,
+                            fromSnooze=True
+                        )
+
+                        continue
+                            
                     client.close()
+                    
                 except Exception as e:
-                    print(f"[Socket] Listener Error: {e}")
+                    print(f"[Socket] Listener Error: {e}", flush=True)
         finally:
             server.close()
 
@@ -508,4 +558,4 @@ if __name__ == '__main__':
     # TODO: Configure these deployment settings
     # For development: host='localhost', port=5000, debug=True
     # For production: host='0.0.0.0', port=80, debug=False
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=80, debug=False)
