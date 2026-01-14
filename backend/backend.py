@@ -214,9 +214,6 @@ class AlertManager:
         alert_id = f"alert_{int(time.time())}_{len(self.active_alerts)}"
         intensity = 1.0 - focus_level
         
-        # BOGDAN/KAAN: Smartwatch uses pattern for vibration
-        
-        # TODO (Tiago): Adjust vibration patterns and messages here
         pattern = [150, 100, 150] if intensity < 0.4 else [200, 100, 200, 100, 200]
         
         messages = {
@@ -255,9 +252,8 @@ class AlertManager:
         
         return result
     
-    def get_pending_alerts(self) -> List[Dict]:
-        # BOGDAN/KAAN: Smartwatch polls this endpoint for new alerts
-        return [asdict(alert) for alert in self.active_alerts.values()]
+    # def get_pending_alerts(self) -> List[Dict]:
+    #     return [asdict(alert) for alert in self.active_alerts.values()]
 
 class FocusMonitoringSystem:
     def __init__(self):
@@ -341,14 +337,13 @@ class FocusMonitoringSystem:
         return {"status": "settings_updated"}
     
     # def pair_device(self, device_id: str):
-    #     # BOGDAN/KAAN: Call this when smartwatch connects
     #     if device_id not in self.state.paired_devices:
     #         self.state.paired_devices.append(device_id)
     #     return {"status": "paired", "device_id": device_id}
-    
+
 
     # IVAN ADDED FUNCTIONALITY FOR SENDING THINGS TO THE WATCH
-    def send_to_watch(self, load, vibrate=False, snooze=True, snoozeTime=None):
+    def send_to_watch(self, load, vibrate=False, snooze=True, snoozeTime=0.1):
         try:
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.settimeout(2)
@@ -416,30 +411,26 @@ def health_check():
 
 @app.route('/api/system/start', methods=['POST'])
 def start_system():
-    # IVAN: Call this when user clicks Start button
     result = system.start_monitoring()
     return jsonify(result)
 
 @app.route('/api/system/stop', methods=['POST'])
 def stop_system():
-    # IVAN: Call this when user clicks Stop button
     result = system.stop_monitoring()
     return jsonify(result)
 
 @app.route('/api/system/state', methods=['GET'])
 def get_system_state():
-    # IVAN: Poll this to update GUI status display
     return jsonify(asdict(system.state))
 
-@app.route('/api/alerts', methods=['GET'])
-def get_alerts():
-    # BOGDAN/KAAN: Smartwatch polls this endpoint for new alerts
-    alerts = system.alert_manager.get_pending_alerts()
-    return jsonify({"alerts": alerts})
+# @app.route('/api/alerts', methods=['GET'])
+# def get_alerts():
+#     # BOGDAN/KAAN: Smartwatch polls this endpoint for new alerts
+#     alerts = system.alert_manager.get_pending_alerts()
+#     return jsonify({"alerts": alerts})
 
 @app.route('/api/alerts/<alert_id>/respond', methods=['POST'])
 def respond_to_alert(alert_id):
-    # BOGDAN/KAAN: Smartwatch calls this when user responds to alert
     data = request.json
     response_type = data.get('response', 'ignore')
     
@@ -473,23 +464,23 @@ def respond_to_alert(alert_id):
 
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
-    # IVAN: Display these settings in GUI
+    # IVAN: Add settings for timer
     settings = {
         "auto_start_enabled": system.state.auto_start_enabled,
-        "snooze_feature_enabled": system.state.snooze_feature_enabled
+        "snooze_feature_enabled": system.state.snooze_feature_enabled,
+        "snooze_timer": system.state.snooze_timer
+
     }
     return jsonify(settings)
 
 @app.route('/api/settings', methods=['PUT'])
 def update_settings():
-    # IVAN: Call this when user changes settings in GUI
     data = request.json
     result = system.update_settings(data)
     return jsonify(result)
 
 @app.route('/api/data/focus-level', methods=['GET'])
 def get_focus_level():
-    # IVAN: Use this for focus level visualization/graph
     return jsonify({
         "focus_level": system.state.focus_level,
         "is_low_focus": system.state.focus_level < 0.6
@@ -497,7 +488,6 @@ def get_focus_level():
 
 @app.route('/api/wizard/trigger-alert', methods=['POST'])
 def wizard_trigger_alert():
-    # TIAGO: Use this for testing vibration patterns without waiting
     data = request.json
     alert_type = data.get('type', 'focus_drop')
     
@@ -515,7 +505,7 @@ def wizard_trigger_alert():
         return jsonify({"error": "Invalid alert type"}), 400
 
 if __name__ == '__main__':
-    # TODO (Radu): Configure these deployment settings
+    # TODO: Configure these deployment settings
     # For development: host='localhost', port=5000, debug=True
     # For production: host='0.0.0.0', port=80, debug=False
     app.run(host='0.0.0.0', port=5000, debug=False)

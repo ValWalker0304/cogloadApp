@@ -77,7 +77,7 @@ function App() {
   // Poll every 1 second to keep GUI in sync with Watch/Backend
   useEffect(() => {
     fetchSystemState(); // Initial fetch
-    const interval = setInterval(fetchSystemState, 10000);
+    const interval = setInterval(fetchSystemState, 30000); // Fetch time
     return () => clearInterval(interval);
   }, []);
 
