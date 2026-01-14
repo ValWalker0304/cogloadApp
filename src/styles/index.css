@@ -1,0 +1,54 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+
+@layer base {
+  :root {
+    /* Backgrounds */
+    --background: 260 20% 10%; /* Matches your dark purple bg */
+    --foreground: 210 40% 98%;
+    
+    /* Cards */
+    --card: 260 25% 15%;
+    --card-foreground: 210 40% 98%;
+    
+    /* UI Elements */
+    --popover: 260 25% 15%;
+    --popover-foreground: 210 40% 98%;
+    
+    /* Primary (Purple Accent) */
+    --primary: 263.4 70% 50.4%;
+    --primary-foreground: 210 40% 98%;
+    
+    /* Secondary (Muted Elements) */
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    
+    /* Muted Text */
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    
+    /* Borders & Inputs */
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    
+    /* Interactive Ring */
+    --ring: 263.4 70% 50.4%;
+    
+    /* Border Radius */
+    --radius: 0.75rem;
+  }
+
+  body {
+    @apply  text-white font-sans antialiased overflow-hidden selection:bg-purple-500/30;
+  }
+}
+
+/* --- Custom Utilities --- */
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
